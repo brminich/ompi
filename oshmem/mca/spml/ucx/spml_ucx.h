@@ -98,6 +98,7 @@ struct mca_spml_ucx {
     int                      priority; /* component priority */
     bool                     async_progress;
     int                      async_tick;
+    pthread_mutex_t          async_lock;
     shmem_internal_mutex_t   internal_mutex;
 };
 typedef struct mca_spml_ucx mca_spml_ucx_t;
@@ -173,6 +174,17 @@ mca_spml_ucx_get_mkey(mca_spml_ucx_ctx_t *ucx_ctx, int pe, void *va, void **rva,
     *rva = map_segment_va2rva(&mkey->super, va);
     return &mkey->key;
 }
+#define SHMEM_ASYNC_MUTEX_LOCK()                                     \
+    do {                                                                \
+        if (mca_spml_ucx.async_progress) \
+            pthread_mutex_lock(&mca_spml_ucx.async_lock);                                \
+    } while (0)
+#define SHMEM_ASYNC_MUTEX_UNLOCK(_mutex)                                   \
+    do {                                                                \
+        if (mca_spml_ucx.async_progress) \
+            pthread_mutex_unlock(&mca_spml_ucx.async_lock);                                \
+    } while (0)
+
 
 static inline int ucx_status_to_oshmem(ucs_status_t status)
 {

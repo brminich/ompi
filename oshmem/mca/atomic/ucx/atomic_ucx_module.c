@@ -14,6 +14,7 @@
 #include "oshmem/constants.h"
 #include "oshmem/mca/atomic/atomic.h"
 #include "oshmem/mca/spml/spml.h"
+#include "oshmem/mca/spml/ucx/spml_ucx.h"
 #include "oshmem/mca/memheap/memheap.h"
 #include "oshmem/proc/proc.h"
 #include "atomic_ucx.h"
@@ -47,10 +48,12 @@ int mca_atomic_ucx_op(shmem_ctx_t ctx,
 
     assert((8 == size) || (4 == size));
 
+    SHMEM_ASYNC_MUTEX_LOCK();
     ucx_mkey = mca_spml_ucx_get_mkey(ucx_ctx, pe, target, (void *)&rva, mca_spml_self);
     status = ucp_atomic_post(ucx_ctx->ucp_peers[pe].ucp_conn,
                              op, value, size, rva,
                              ucx_mkey->rkey);
+    SHMEM_ASYNC_MUTEX_UNLOCK();
     return ucx_status_to_oshmem(status);
 }
 
@@ -67,16 +70,20 @@ int mca_atomic_ucx_fop(shmem_ctx_t ctx,
     spml_ucx_mkey_t *ucx_mkey;
     uint64_t rva;
     mca_spml_ucx_ctx_t *ucx_ctx = (mca_spml_ucx_ctx_t *)ctx;
+    int ret;
 
     assert((8 == size) || (4 == size));
 
+    SHMEM_ASYNC_MUTEX_LOCK();
     ucx_mkey = mca_spml_ucx_get_mkey(ucx_ctx, pe, target, (void *)&rva, mca_spml_self);
     status_ptr = ucp_atomic_fetch_nb(ucx_ctx->ucp_peers[pe].ucp_conn,
                                      op, value, prev, size,
                                      rva, ucx_mkey->rkey,
                                      opal_common_ucx_empty_complete_cb);
-    return opal_common_ucx_wait_request(status_ptr, ucx_ctx->ucp_worker,
+    ret = opal_common_ucx_wait_request(status_ptr, ucx_ctx->ucp_worker,
                                         "ucp_atomic_fetch_nb");
+    SHMEM_ASYNC_MUTEX_UNLOCK();
+    return ret;
 }
 
 static int mca_atomic_ucx_add(shmem_ctx_t ctx,

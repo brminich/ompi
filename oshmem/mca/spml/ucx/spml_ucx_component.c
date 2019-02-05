@@ -12,6 +12,7 @@
 
 #include <sys/types.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #include "oshmem_config.h"
 #include "orte/util/show_help.h"
@@ -120,7 +121,9 @@ static int mca_spml_ucx_component_register(void)
 
 int spml_ucx_progress(void)
 {
+    SHMEM_ASYNC_MUTEX_LOCK();
     ucp_worker_progress(mca_spml_ucx_ctx_default.ucp_worker);
+    SHMEM_ASYNC_MUTEX_UNLOCK();
     return 1;
 }
 
@@ -132,10 +135,16 @@ void mca_spml_ucx_async_cb(int fd, short event, void *cbdata)
   //  tv.tv_sec  = 0;
  //   tv.tv_usec = mca_spml_ucx.async_tick;
 //    opal_event_evtimer_add(mca_spml_ucx_ctx_default.tick_event, &tv);
+
+    if (pthread_mutex_trylock(&mca_spml_ucx.async_lock)) {
+        return;
+    }
+
     do {
         count = ucp_worker_progress(mca_spml_ucx_ctx_default.ucp_worker);
       //  total += count;
     }  while(count);
+    pthread_mutex_unlock(&mca_spml_ucx.async_lock);
     //SPML_UCX_VERBOSE(2, "Progressed persistent %d\n", total);
 }
 
@@ -158,6 +167,7 @@ static int spml_ucx_init(void)
     ucp_worker_params_t wkr_params;
     ucp_worker_attr_t wkr_attr;
     struct timeval tv;
+    pthread_mutexattr_t p_attr;
 
     err = ucp_config_read("OSHMEM", NULL, &ucp_config);
     if (UCS_OK != err) {
@@ -197,8 +207,7 @@ static int spml_ucx_init(void)
     SHMEM_MUTEX_INIT(mca_spml_ucx.internal_mutex);
 
     wkr_params.field_mask  = UCP_WORKER_PARAM_FIELD_THREAD_MODE;
-    if ((oshmem_mpi_thread_requested == SHMEM_THREAD_MULTIPLE) ||
-        mca_spml_ucx.async_progress) {
+    if (oshmem_mpi_thread_requested == SHMEM_THREAD_MULTIPLE) {
         wkr_params.thread_mode = UCS_THREAD_MODE_MULTI;
     } else {
         wkr_params.thread_mode = UCS_THREAD_MODE_SINGLE;
@@ -216,13 +225,13 @@ static int spml_ucx_init(void)
     if (oshmem_mpi_thread_requested == SHMEM_THREAD_MULTIPLE &&
         wkr_attr.thread_mode != UCS_THREAD_MODE_MULTI) {
         oshmem_mpi_thread_provided = SHMEM_THREAD_SINGLE;
-        if (mca_spml_ucx.async_progress) {
-            SPML_UCX_ERROR("Init async progress failed: UCX is single-threaded");
-            mca_spml_ucx.async_progress = false;
-        }
     }
 
     if (mca_spml_ucx.async_progress) {
+        pthread_mutexattr_init(&p_attr);
+        pthread_mutexattr_settype(&p_attr, PTHREAD_MUTEX_RECURSIVE);
+
+        pthread_mutex_init(&mca_spml_ucx.async_lock, &p_attr);
         mca_spml_ucx_ctx_default.async_event_base = opal_progress_thread_init(NULL);
         if (NULL ==  mca_spml_ucx_ctx_default.async_event_base) {
             SPML_UCX_ERROR("failed to init async progress thread");

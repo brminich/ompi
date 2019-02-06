@@ -64,7 +64,7 @@ mca_spml_ucx_t mca_spml_ucx = {
         .spml_get_nb        = mca_spml_ucx_get_nb,
         .spml_recv          = mca_spml_ucx_recv,
         .spml_send          = mca_spml_ucx_send,
-        .spml_wait          = mca_spml_base_wait,
+        .spml_wait          = mca_spml_ucx_wait,
         .spml_wait_nb       = mca_spml_base_wait_nb,
         .spml_test          = mca_spml_base_test,
         .spml_fence         = mca_spml_ucx_fence,
@@ -675,6 +675,24 @@ int mca_spml_ucx_get_nb(shmem_ctx_t ctx, void *src_addr, size_t size, void *dst_
     return ucx_status_to_oshmem_nb(status);
 }
 
+int mca_spml_ucx_wait(void* addr, int cmp, void* value, int datatype)
+{
+    int ret;
+    struct timeval tv;
+
+    if (mca_spml_ucx.async_progress) {
+        opal_event_evtimer_del(mca_spml_ucx_ctx_default.tick_event);
+    }
+    ret = mca_spml_base_wait(addr, cmp, value, datatype);
+    if (mca_spml_ucx.async_progress) {
+        tv.tv_sec                           = 0;
+        tv.tv_usec                          = mca_spml_ucx.async_tick;
+        opal_event_evtimer_add(mca_spml_ucx_ctx_default.tick_event, &tv);
+    }
+
+    return ret;
+}
+
 int mca_spml_ucx_put(shmem_ctx_t ctx, void* dst_addr, size_t size, void* src_addr, int dst)
 {
     void *rva;
@@ -737,11 +755,20 @@ int mca_spml_ucx_fence(shmem_ctx_t ctx)
 int mca_spml_ucx_quiet(shmem_ctx_t ctx)
 {
     int ret;
+    struct timeval tv;
     mca_spml_ucx_ctx_t *ucx_ctx = (mca_spml_ucx_ctx_t *)ctx;
 
-    SHMEM_ASYNC_MUTEX_LOCK();
+    if (mca_spml_ucx.async_progress) {
+        pthread_mutex_lock(&mca_spml_ucx.async_lock);
+        opal_event_evtimer_del(mca_spml_ucx_ctx_default.tick_event);
+    }
     ret = opal_common_ucx_worker_flush(ucx_ctx->ucp_worker);
-    SHMEM_ASYNC_MUTEX_UNLOCK();
+    if (mca_spml_ucx.async_progress) {
+        tv.tv_sec                           = 0;
+        tv.tv_usec                          = mca_spml_ucx.async_tick;
+        opal_event_evtimer_add(mca_spml_ucx_ctx_default.tick_event, &tv);
+        pthread_mutex_unlock(&mca_spml_ucx.async_lock);
+    }
     if (OMPI_SUCCESS != ret) {
          oshmem_shmem_abort(-1);
          return ret;

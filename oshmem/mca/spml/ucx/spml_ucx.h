@@ -122,6 +122,8 @@ extern int mca_spml_ucx_get_nb(shmem_ctx_t ctx,
                               int src,
                               void **handle);
 
+extern int mca_spml_ucx_wait(void* addr, int cmp, void* value, int datatype);
+
 extern int mca_spml_ucx_put(shmem_ctx_t ctx,
                               void* dst_addr,
                               size_t size,

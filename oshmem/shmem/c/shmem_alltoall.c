@@ -114,9 +114,9 @@ void shmemx_alltoallmem_nbi(void *target,
     for (peer = 0; peer < oshmem_group_all->proc_count; peer++) {
         dst_pe = (peer + my_pe) % oshmem_group_all->proc_count;
         rc = MCA_SPML_CALL(put_nb(oshmem_ctx_default,
-                                  (void*)((uintptr_t)target + my_pe * size),
+                                  (void*)((uintptr_t)target),
                                   size,
-                                  (void*)((uintptr_t)source + dst_pe * size),
+                                  (void*)((uintptr_t)source),
                                   dst_pe, NULL));
         RUNTIME_CHECK_RC(rc);
 

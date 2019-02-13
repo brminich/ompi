@@ -12,6 +12,7 @@
 
 #include <sys/types.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #include "oshmem_config.h"
 #include "orte/util/show_help.h"
@@ -24,6 +25,7 @@
 
 #include "orte/util/show_help.h"
 #include "opal/util/opal_environ.h"
+#include "opal/runtime/opal_progress_threads.h"
 
 static int mca_spml_ucx_component_register(void);
 static int mca_spml_ucx_component_open(void);
@@ -104,6 +106,14 @@ static int mca_spml_ucx_component_register(void)
                                     "Use non-blocking memory registration for shared heap",
                                     &mca_spml_ucx.heap_reg_nb);
 
+    mca_spml_ucx_param_register_int("async_progress", 0,
+                                    "Enable asynchronous progress thread",
+                                    &mca_spml_ucx.async_progress);
+
+    mca_spml_ucx_param_register_int("async_tick_usec", 3000,
+                                    "Enable asynchronous progress thread",
+                                    &mca_spml_ucx.async_tick);
+
     opal_common_ucx_mca_var_register(&mca_spml_ucx_component.spmlm_version);
 
     return OSHMEM_SUCCESS;
@@ -111,8 +121,31 @@ static int mca_spml_ucx_component_register(void)
 
 int spml_ucx_progress(void)
 {
+    SHMEM_ASYNC_MUTEX_LOCK();
     ucp_worker_progress(mca_spml_ucx_ctx_default.ucp_worker);
+    SHMEM_ASYNC_MUTEX_UNLOCK();
     return 1;
+}
+
+void mca_spml_ucx_async_cb(int fd, short event, void *cbdata)
+{
+  //  struct timeval tv;
+    int count  = 0;
+    //int total = 0;
+  //  tv.tv_sec  = 0;
+ //   tv.tv_usec = mca_spml_ucx.async_tick;
+//    opal_event_evtimer_add(mca_spml_ucx_ctx_default.tick_event, &tv);
+
+    if (!ucs_spin_trylock(&mca_spml_ucx.async_lock)) {
+        return;
+    }
+
+    do {
+        count = ucp_worker_progress(mca_spml_ucx_ctx_default.ucp_worker);
+      //  total += count;
+    }  while(count);
+    ucs_spin_unlock(&mca_spml_ucx.async_lock);
+    //SPML_UCX_VERBOSE(2, "Progressed persistent %d\n", total);
 }
 
 static int mca_spml_ucx_component_open(void)
@@ -133,6 +166,8 @@ static int spml_ucx_init(void)
     ucp_context_attr_t attr;
     ucp_worker_params_t wkr_params;
     ucp_worker_attr_t wkr_attr;
+    struct timeval tv;
+    pthread_mutexattr_t p_attr;
 
     err = ucp_config_read("OSHMEM", NULL, &ucp_config);
     if (UCS_OK != err) {
@@ -192,8 +227,26 @@ static int spml_ucx_init(void)
         oshmem_mpi_thread_provided = SHMEM_THREAD_SINGLE;
     }
 
-    oshmem_ctx_default = (shmem_ctx_t) &mca_spml_ucx_ctx_default;
+    if (mca_spml_ucx.async_progress) {
+        ucs_spinlock_init(&mca_spml_ucx.async_lock);
+        mca_spml_ucx_ctx_default.async_event_base = opal_progress_thread_init(NULL);
+        if (NULL ==  mca_spml_ucx_ctx_default.async_event_base) {
+            SPML_UCX_ERROR("failed to init async progress thread");
+            return OSHMEM_ERROR;
+        }
 
+        mca_spml_ucx_ctx_default.tick_event = opal_event_alloc();
+        tv.tv_sec                           = 0;
+        tv.tv_usec                          = mca_spml_ucx.async_tick;
+        opal_event_set(mca_spml_ucx_ctx_default.async_event_base,
+                       mca_spml_ucx_ctx_default.tick_event,
+                      -1, EV_PERSIST,
+                       mca_spml_ucx_async_cb, NULL);
+        opal_event_evtimer_add(mca_spml_ucx_ctx_default.tick_event, &tv);
+        SPML_UCX_VERBOSE( 2, "%d: Addeed event to %d\n", pthread_self(), mca_spml_ucx_ctx_default.async_event_base);
+    }
+
+    oshmem_ctx_default = (shmem_ctx_t) &mca_spml_ucx_ctx_default;
     return OSHMEM_SUCCESS;
 }
 
@@ -220,7 +273,13 @@ mca_spml_ucx_component_init(int* priority,
 static int mca_spml_ucx_component_fini(void)
 {
     opal_progress_unregister(spml_ucx_progress);
-        
+
+    if (mca_spml_ucx.async_progress) {
+        opal_event_evtimer_del(mca_spml_ucx_ctx_default.tick_event);
+        opal_progress_thread_finalize(NULL);
+        ucs_spinlock_destroy(&mca_spml_ucx.async_lock);
+    }
+
     if (mca_spml_ucx_ctx_default.ucp_worker) {
         ucp_worker_destroy(mca_spml_ucx_ctx_default.ucp_worker);
     }

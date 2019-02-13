@@ -18,6 +18,10 @@
 
 #include "oshmem/mca/scoll/scoll.h"
 
+#include "oshmem/mca/atomic/atomic.h"
+
+#include "oshmem/mca/scoll/base/base.h"
+
 #include "oshmem/proc/proc.h"
 
 static void _shmem_alltoall(void *target,
@@ -95,6 +99,35 @@ static void _shmem_alltoall(void *target,
     oshmem_proc_group_destroy(group);
     RUNTIME_CHECK_RC(rc);
 }
+
+void shmemx_alltoallmem_nbi(void *target,
+                            const void *source,
+                            size_t size,
+                            long *counter)
+{
+    int my_pe = oshmem_group_all->my_pe;
+    int peer, dst_pe, rc;
+    long val = 1;
+    SCOLL_VERBOSE(2, "[#%d] send data to all PE in the group",
+                   my_pe);
+
+    for (peer = 0; peer < oshmem_group_all->proc_count; peer++) {
+        dst_pe = (peer + my_pe) % oshmem_group_all->proc_count;
+        rc = MCA_SPML_CALL(put_nb(oshmem_ctx_default,
+                                  (void*)((uintptr_t)target + my_pe * size),
+                                  size,
+                                  (void*)((uintptr_t)source + dst_pe * size),
+                                  dst_pe, NULL));
+        RUNTIME_CHECK_RC(rc);
+
+        MCA_SPML_CALL(fence(oshmem_ctx_default));
+
+        rc = MCA_ATOMIC_CALL(add(oshmem_ctx_default, (void*)counter, val,
+                                 sizeof(val), dst_pe));
+        RUNTIME_CHECK_RC(rc);
+    }
+}
+
 
 #if OSHMEM_PROFILING
 #include "oshmem/include/pshmem.h"

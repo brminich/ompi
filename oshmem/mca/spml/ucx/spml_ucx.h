@@ -38,6 +38,7 @@
 #include "opal/mca/common/ucx/common_ucx.h"
 
 #include <ucp/api/ucp.h>
+#include <ucs/type/spinlock.h>
 
 BEGIN_C_DECLS
 
@@ -65,12 +66,15 @@ struct ucp_peer {
     spml_ucx_cached_mkey_t   mkeys[MCA_MEMHEAP_SEG_COUNT];
 };
 typedef struct ucp_peer ucp_peer_t;
- 
+
 struct mca_spml_ucx_ctx {
     ucp_worker_h             ucp_worker;
     ucp_peer_t              *ucp_peers;
     long                     options;
+    opal_event_base_t        *async_event_base;
+    opal_event_t             *tick_event;
 };
+
 typedef struct mca_spml_ucx_ctx mca_spml_ucx_ctx_t;
 
 extern mca_spml_ucx_ctx_t mca_spml_ucx_ctx_default;
@@ -93,6 +97,9 @@ struct mca_spml_ucx {
     char                     **remote_addrs_tbl;
     opal_list_t              ctx_list;
     int                      priority; /* component priority */
+    bool                     async_progress;
+    int                      async_tick;
+    ucs_spinlock_t           async_lock;
     shmem_internal_mutex_t   internal_mutex;
 };
 typedef struct mca_spml_ucx mca_spml_ucx_t;
@@ -152,9 +159,9 @@ extern int mca_spml_ucx_del_procs(ompi_proc_t** procs, size_t nprocs);
 extern int mca_spml_ucx_fence(shmem_ctx_t ctx);
 extern int mca_spml_ucx_quiet(shmem_ctx_t ctx);
 extern int spml_ucx_progress(void);
+void mca_spml_ucx_async_cb(int fd, short event, void *cbdata);
 
-
-static inline spml_ucx_mkey_t * 
+static inline spml_ucx_mkey_t *
 mca_spml_ucx_get_mkey(mca_spml_ucx_ctx_t *ucx_ctx, int pe, void *va, void **rva, mca_spml_ucx_t* module)
 {
     spml_ucx_cached_mkey_t *mkey;
@@ -168,6 +175,17 @@ mca_spml_ucx_get_mkey(mca_spml_ucx_ctx_t *ucx_ctx, int pe, void *va, void **rva,
     *rva = map_segment_va2rva(&mkey->super, va);
     return &mkey->key;
 }
+
+#define SHMEM_ASYNC_MUTEX_LOCK()                                     \
+    do {                                                                \
+        if (mca_spml_ucx.async_progress) \
+            ucs_spin_lock(&mca_spml_ucx.async_lock);                                \
+    } while (0)
+#define SHMEM_ASYNC_MUTEX_UNLOCK(_mutex)                                   \
+    do {                                                                \
+        if (mca_spml_ucx.async_progress) \
+           ucs_spin_unlock(&mca_spml_ucx.async_lock);                                \
+    } while (0)
 
 static inline int ucx_status_to_oshmem(ucs_status_t status)
 {

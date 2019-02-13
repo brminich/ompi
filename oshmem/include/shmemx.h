@@ -169,6 +169,12 @@ OSHMEM_DECLSPEC void shmemx_int32_prod_to_all(int32_t *target, const int32_t *so
 OSHMEM_DECLSPEC void shmemx_int64_prod_to_all(int64_t *target, const int64_t *source, int nreduce, int PE_start, int logPE_stride, int PE_size, int64_t *pWrk, long *pSync);
 
 /*
+ * Collective routines
+ */
+OSHMEM_DECLSPEC void shmemx_alltoallmem_nbi(void *target, const void *source, size_t size, long *counter);
+
+
+/*
  * Backward compatibility section
  */
 #define shmem_int32_swap            shmemx_int32_swap

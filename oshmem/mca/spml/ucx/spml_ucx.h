@@ -38,7 +38,6 @@
 #include "opal/mca/common/ucx/common_ucx.h"
 
 #include <ucp/api/ucp.h>
-#include <ucs/type/spinlock.h>
 
 BEGIN_C_DECLS
 
@@ -71,8 +70,6 @@ struct mca_spml_ucx_ctx {
     ucp_worker_h             ucp_worker;
     ucp_peer_t              *ucp_peers;
     long                     options;
-    opal_event_base_t        *async_event_base;
-    opal_event_t             *tick_event;
 };
 
 typedef struct mca_spml_ucx_ctx mca_spml_ucx_ctx_t;
@@ -99,8 +96,10 @@ struct mca_spml_ucx {
     int                      priority; /* component priority */
     bool                     async_progress;
     int                      async_tick;
-    ucs_spinlock_t           async_lock;
+    opal_event_base_t        *async_event_base;
+    opal_event_t             *tick_event;
     shmem_internal_mutex_t   internal_mutex;
+    shmem_ctx_t              *aux_ctx;
 };
 typedef struct mca_spml_ucx mca_spml_ucx_t;
 
@@ -160,6 +159,7 @@ extern int mca_spml_ucx_fence(shmem_ctx_t ctx);
 extern int mca_spml_ucx_quiet(shmem_ctx_t ctx);
 extern int spml_ucx_progress(void);
 void mca_spml_ucx_async_cb(int fd, short event, void *cbdata);
+OSHMEM_DECLSPEC void mca_spml_ucx_async_event_set();
 
 static inline spml_ucx_mkey_t *
 mca_spml_ucx_get_mkey(mca_spml_ucx_ctx_t *ucx_ctx, int pe, void *va, void **rva, mca_spml_ucx_t* module)
@@ -173,19 +173,9 @@ mca_spml_ucx_get_mkey(mca_spml_ucx_ctx_t *ucx_ctx, int pe, void *va, void **rva,
         return module->get_mkey_slow(pe, va, rva);
     }
     *rva = map_segment_va2rva(&mkey->super, va);
+    SPML_UCX_VERBOSE(2, " %d: get key for %d %p, ucxrkey %p",oshmem_my_proc_id(),pe, &mkey->key, mkey->key.rkey);
     return &mkey->key;
 }
-
-#define SHMEM_ASYNC_MUTEX_LOCK()                                     \
-    do {                                                                \
-        if (mca_spml_ucx.async_progress) \
-            ucs_spin_lock(&mca_spml_ucx.async_lock);                                \
-    } while (0)
-#define SHMEM_ASYNC_MUTEX_UNLOCK(_mutex)                                   \
-    do {                                                                \
-        if (mca_spml_ucx.async_progress) \
-           ucs_spin_unlock(&mca_spml_ucx.async_lock);                                \
-    } while (0)
 
 static inline int ucx_status_to_oshmem(ucs_status_t status)
 {

@@ -109,9 +109,7 @@ int mca_spml_ucx_del_procs(ompi_proc_t** procs, size_t nprocs)
     size_t i;
     int ret;
 
-    SHMEM_ASYNC_MUTEX_LOCK();
     oshmem_shmem_barrier();
-    SHMEM_ASYNC_MUTEX_UNLOCK();
 
     if (!mca_spml_ucx_ctx_default.ucp_peers) {
         return OSHMEM_SUCCESS;
@@ -130,12 +128,10 @@ int mca_spml_ucx_del_procs(ompi_proc_t** procs, size_t nprocs)
         mca_spml_ucx_ctx_default.ucp_peers[i].ucp_conn = NULL;
     }
 
-    SHMEM_ASYNC_MUTEX_LOCK();
     ret = opal_common_ucx_del_procs(del_procs, nprocs, oshmem_my_proc_id(),
                                     mca_spml_ucx.num_disconnect,
                                     mca_spml_ucx_ctx_default.ucp_worker);
 
-    SHMEM_ASYNC_MUTEX_UNLOCK();
     free(del_procs);
     free(mca_spml_ucx.remote_addrs_tbl);
     free(mca_spml_ucx_ctx_default.ucp_peers);
@@ -239,7 +235,6 @@ int mca_spml_ucx_add_procs(ompi_proc_t** procs, size_t nprocs)
         goto error;
     }
 
-    SHMEM_ASYNC_MUTEX_LOCK();
     err = ucp_worker_get_address(mca_spml_ucx_ctx_default.ucp_worker, &wk_local_addr, &wk_addr_len);
     if (err != UCS_OK) {
         goto error;
@@ -287,7 +282,6 @@ int mca_spml_ucx_add_procs(ompi_proc_t** procs, size_t nprocs)
     free(wk_roffs);
 
     SPML_UCX_VERBOSE(50, "*** ADDED PROCS ***");
-    SHMEM_ASYNC_MUTEX_UNLOCK();
     return OSHMEM_SUCCESS;
 
 error2:
@@ -309,7 +303,6 @@ error2:
 error:
     rc = OSHMEM_ERR_OUT_OF_RESOURCE;
     SPML_UCX_ERROR("add procs FAILED rc=%d", rc);
-    SHMEM_ASYNC_MUTEX_UNLOCK();
     return rc;
 
 }
@@ -539,9 +532,11 @@ int mca_spml_ucx_ctx_create(long options, shmem_ctx_t *ctx)
     mca_spml_ucx_ctx_list_item_t *ctx_item;
     ucp_worker_params_t params;
     ucp_ep_params_t ep_params;
+    sshmem_mkey_t *mkey;
+    spml_ucx_mkey_t *ucx_mkey;
     size_t i, nprocs = oshmem_num_procs();
     ucs_status_t err;
-    int rc = OSHMEM_ERROR;
+    int j, rc = OSHMEM_ERROR;
 
     ctx_item = OBJ_NEW(mca_spml_ucx_ctx_list_item_t);
     ctx_item->ctx.options = options;
@@ -553,12 +548,10 @@ int mca_spml_ucx_ctx_create(long options, shmem_ctx_t *ctx)
         params.thread_mode = UCS_THREAD_MODE_MULTI;
     }
 
-    SHMEM_ASYNC_MUTEX_LOCK();
     err = ucp_worker_create(mca_spml_ucx.ucp_context, &params,
                             &ctx_item->ctx.ucp_worker);
     if (UCS_OK != err) {
         OBJ_RELEASE(ctx_item);
-        SHMEM_ASYNC_MUTEX_UNLOCK();
         return OSHMEM_ERROR;
     }
 
@@ -566,6 +559,7 @@ int mca_spml_ucx_ctx_create(long options, shmem_ctx_t *ctx)
     if (NULL == ctx_item->ctx.ucp_peers) {
         goto error;
     }
+    SPML_UCX_VERBOSE(2, "mem %p", memheap_map);
 
     for (i = 0; i < nprocs; i++) {
         ep_params.field_mask = UCP_EP_PARAM_FIELD_REMOTE_ADDRESS;
@@ -577,6 +571,21 @@ int mca_spml_ucx_ctx_create(long options, shmem_ctx_t *ctx)
                        ucs_status_string(err));
             goto error2;
         }
+
+        for (j = 0; j < memheap_map->n_segments; j++) {
+            mkey     = memheap_map->mem_segs[j].mkeys_cache[i];
+            ucx_mkey = &ctx_item->ctx.ucp_peers[i].mkeys[j].key;
+            err = ucp_ep_rkey_unpack(ctx_item->ctx.ucp_peers[i].ucp_conn,
+                                     mkey->u.data, &ucx_mkey->rkey);
+            if (UCS_OK != err) {
+                SPML_UCX_ERROR("failed to unpack rkey: %s", ucs_status_string(err));
+                goto error2;
+            }
+            mca_spml_ucx_cache_mkey(&ctx_item->ctx, mkey, j, i);
+            SPML_UCX_VERBOSE(2, "%d: ctx %p, pack key (%p, %p)  for seg %d, peer %d ",
+                            oshmem_my_proc_id() ,&ctx_item->ctx, ucx_mkey, ucx_mkey->rkey,j,i );
+        }
+
     }
 
     SHMEM_MUTEX_LOCK(mca_spml_ucx.internal_mutex);
@@ -587,7 +596,6 @@ int mca_spml_ucx_ctx_create(long options, shmem_ctx_t *ctx)
 
     (*ctx) = (shmem_ctx_t)(&ctx_item->ctx);
 
-    SHMEM_ASYNC_MUTEX_UNLOCK();
     return OSHMEM_SUCCESS;
 
  error2:
@@ -605,7 +613,6 @@ int mca_spml_ucx_ctx_create(long options, shmem_ctx_t *ctx)
     OBJ_RELEASE(ctx_item);
     rc = OSHMEM_ERR_OUT_OF_RESOURCE;
     SPML_ERROR("ctx create FAILED rc=%d", rc);
-    SHMEM_ASYNC_MUTEX_UNLOCK();
     return rc;
 }
 
@@ -617,7 +624,6 @@ void mca_spml_ucx_ctx_destroy(shmem_ctx_t ctx)
     MCA_SPML_CALL(quiet(ctx));
 
     SHMEM_MUTEX_LOCK(mca_spml_ucx.internal_mutex);
-    SHMEM_ASYNC_MUTEX_LOCK();
 
     /* delete context object from list */
     OPAL_LIST_FOREACH_SAFE(ctx_item, next, &(mca_spml_ucx.ctx_list),
@@ -634,7 +640,6 @@ void mca_spml_ucx_ctx_destroy(shmem_ctx_t ctx)
         }
     }
 
-    SHMEM_ASYNC_MUTEX_UNLOCK();
     SHMEM_MUTEX_UNLOCK(mca_spml_ucx.internal_mutex);
 }
 
@@ -685,17 +690,14 @@ int mca_spml_ucx_put(shmem_ctx_t ctx, void* dst_addr, size_t size, void* src_add
 #else
     ucs_status_t status;
 #endif
-    SHMEM_ASYNC_MUTEX_LOCK();
     ucx_mkey = mca_spml_ucx_get_mkey(ucx_ctx, dst, dst_addr, &rva, &mca_spml_ucx);
 #if HAVE_DECL_UCP_PUT_NB
     request = ucp_put_nb(ucx_ctx->ucp_peers[dst].ucp_conn, src_addr, size,
                          (uint64_t)rva, ucx_mkey->rkey, opal_common_ucx_empty_complete_cb);
-    SHMEM_ASYNC_MUTEX_UNLOCK();
     return opal_common_ucx_wait_request(request, ucx_ctx->ucp_worker, "ucp_put_nb");
 #else
     status = ucp_put(ucx_ctx->ucp_peers[dst].ucp_conn, src_addr, size,
                      (uint64_t)rva, ucx_mkey->rkey);
-    SHMEM_ASYNC_MUTEX_UNLOCK();
     return ucx_status_to_oshmem(status);
 #endif
 }
@@ -707,12 +709,10 @@ int mca_spml_ucx_put_nb(shmem_ctx_t ctx, void* dst_addr, size_t size, void* src_
     spml_ucx_mkey_t *ucx_mkey;
     mca_spml_ucx_ctx_t *ucx_ctx = (mca_spml_ucx_ctx_t *)ctx;
 
-    SHMEM_ASYNC_MUTEX_LOCK();
     ucx_mkey = mca_spml_ucx_get_mkey(ucx_ctx, dst, dst_addr, &rva, &mca_spml_ucx);
     status = ucp_put_nbi(ucx_ctx->ucp_peers[dst].ucp_conn, src_addr, size,
                      (uint64_t)rva, ucx_mkey->rkey);
 
-    SHMEM_ASYNC_MUTEX_UNLOCK();
     return ucx_status_to_oshmem_nb(status);
 }
 
@@ -723,9 +723,7 @@ int mca_spml_ucx_fence(shmem_ctx_t ctx)
     ucs_status_t err;
     mca_spml_ucx_ctx_t *ucx_ctx = (mca_spml_ucx_ctx_t *)ctx;
 
-    SHMEM_ASYNC_MUTEX_LOCK();
     err = ucp_worker_fence(ucx_ctx->ucp_worker);
-    SHMEM_ASYNC_MUTEX_UNLOCK();
     if (UCS_OK != err) {
          SPML_UCX_ERROR("fence failed: %s", ucs_status_string(err));
          oshmem_shmem_abort(-1);
@@ -739,9 +737,7 @@ int mca_spml_ucx_quiet(shmem_ctx_t ctx)
     int ret;
     mca_spml_ucx_ctx_t *ucx_ctx = (mca_spml_ucx_ctx_t *)ctx;
 
-    SHMEM_ASYNC_MUTEX_LOCK();
     ret = opal_common_ucx_worker_flush(ucx_ctx->ucp_worker);
-    SHMEM_ASYNC_MUTEX_UNLOCK();
     if (OMPI_SUCCESS != ret) {
          oshmem_shmem_abort(-1);
          return ret;
@@ -754,7 +750,6 @@ int mca_spml_ucx_recv(void* buf, size_t size, int src)
 {
     int rc = OSHMEM_SUCCESS;
 
-    SHMEM_ASYNC_MUTEX_LOCK();
     rc = MCA_PML_CALL(recv(buf,
                 size,
                 &(ompi_mpi_unsigned_char.dt),
@@ -763,7 +758,6 @@ int mca_spml_ucx_recv(void* buf, size_t size, int src)
                 &(ompi_mpi_comm_world.comm),
                 NULL));
 
-    SHMEM_ASYNC_MUTEX_UNLOCK();
     return rc;
 }
 
@@ -775,7 +769,6 @@ int mca_spml_ucx_send(void* buf,
 {
     int rc = OSHMEM_SUCCESS;
 
-    SHMEM_ASYNC_MUTEX_LOCK();
     rc = MCA_PML_CALL(send(buf,
                 size,
                 &(ompi_mpi_unsigned_char.dt),
@@ -784,6 +777,5 @@ int mca_spml_ucx_send(void* buf,
                 (mca_pml_base_send_mode_t)mode,
                 &(ompi_mpi_comm_world.comm)));
 
-    SHMEM_ASYNC_MUTEX_UNLOCK();
     return rc;
 }

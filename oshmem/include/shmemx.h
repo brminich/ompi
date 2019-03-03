@@ -171,8 +171,10 @@ OSHMEM_DECLSPEC void shmemx_int64_prod_to_all(int64_t *target, const int64_t *so
 /*
  * Collective routines
  */
-OSHMEM_DECLSPEC void shmemx_alltoallmem_nbi(void *target, const void *source, size_t size, long *counter);
-
+OSHMEM_DECLSPEC void shmemx_put_with_long_inc_all(void *target,
+                                                  const void *source,
+                                                  size_t size,
+                                                  long *counter);
 
 /*
  * Backward compatibility section

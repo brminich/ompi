@@ -314,6 +314,11 @@ typedef int (*mca_spml_base_module_send_fn_t)(void *buf,
                                               int dst,
                                               mca_spml_base_put_mode_t mode);
 
+typedef int (*mca_spml_base_module_put_all_nb_fn_t)(void *target,
+                                                    const void *source,
+                                                    size_t size,
+                                                    long *counter);
+
 /**
  * Assures ordering of delivery of put() requests
  *
@@ -381,6 +386,7 @@ struct mca_spml_base_module_1_0_0_t {
     mca_spml_base_module_mkey_ptr_fn_t    spml_rmkey_ptr;
 
     mca_spml_base_module_memuse_hook_fn_t spml_memuse_hook;
+    mca_spml_base_module_put_all_nb_fn_t  spml_put_all_nb;
     void *self;
 };
 

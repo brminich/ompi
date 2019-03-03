@@ -121,32 +121,38 @@ static int mca_spml_ucx_component_register(void)
 
 int spml_ucx_progress(void)
 {
-    ucp_worker_progress(mca_spml_ucx_ctx_default.ucp_worker);
-    return 1;
-}
+    mca_spml_ucx_ctx_list_item_t *ctx_item;
 
-void mca_spml_ucx_async_event_set()
-{
-    struct timeval tv;
-    tv.tv_sec  = 0;
-    tv.tv_usec = mca_spml_ucx.async_tick;
-    opal_event_evtimer_add(mca_spml_ucx.tick_event, &tv);
+    OPAL_LIST_FOREACH(ctx_item, &(mca_spml_ucx.ctx_list),
+                      mca_spml_ucx_ctx_list_item_t) {
+        ucp_worker_progress(ctx_item->ctx.ucp_worker);
+    }
+    ucp_worker_progress(mca_spml_ucx_ctx_default.ucp_worker);
+
+    if (!mca_spml_ucx.aux_ctx) {
+        return;
+    }
+    if (mca_spml_ucx_aux_trylock()) {
+        return;
+    }
+
+    ucp_worker_progress(mca_spml_ucx.aux_ctx->ucp_worker);
+    mca_spml_ucx_aux_unlock();
+    return 1;
 }
 
 void mca_spml_ucx_async_cb(int fd, short event, void *cbdata)
 {
-  //  struct timeval tv;
     int count  = 0;
-    //int total = 0;
-  //  tv.tv_sec  = 0;
- //   tv.tv_usec = mca_spml_ucx.async_tick;
-//    opal_event_evtimer_add(mca_spml_ucx_ctx_default.tick_event, &tv);
+    if (mca_spml_ucx_aux_trylock()) {
+        return;
+    }
 
     do {
-        count = ucp_worker_progress(((mca_spml_ucx_ctx_t*)(mca_spml_ucx.aux_ctx))->ucp_worker);
-      //  total += count;
+        count = ucp_worker_progress(mca_spml_ucx.aux_ctx->ucp_worker);
     }  while(count);
     SPML_UCX_VERBOSE(2, "Progressed %d\n", count);
+    mca_spml_ucx_aux_unlock();
 }
 
 static int mca_spml_ucx_component_open(void)
@@ -167,7 +173,6 @@ static int spml_ucx_init(void)
     ucp_context_attr_t attr;
     ucp_worker_params_t wkr_params;
     ucp_worker_attr_t wkr_attr;
-    pthread_mutexattr_t p_attr;
 
     err = ucp_config_read("OSHMEM", NULL, &ucp_config);
     if (UCS_OK != err) {
@@ -228,6 +233,7 @@ static int spml_ucx_init(void)
     }
 
     if (mca_spml_ucx.async_progress) {
+        pthread_spin_init(&mca_spml_ucx.async_lock, 0);
         mca_spml_ucx.async_event_base = opal_progress_thread_init(NULL);
         if (NULL ==  mca_spml_ucx.async_event_base) {
             SPML_UCX_ERROR("failed to init async progress thread");
@@ -239,7 +245,6 @@ static int spml_ucx_init(void)
                        mca_spml_ucx.tick_event,
                       -1, EV_PERSIST,
                        mca_spml_ucx_async_cb, NULL);
-        SPML_UCX_VERBOSE( 2, "%d: Addeed event to %d\n", pthread_self(), mca_spml_ucx.async_event_base);
     }
     mca_spml_ucx.aux_ctx = NULL;
 
@@ -269,16 +274,23 @@ mca_spml_ucx_component_init(int* priority,
 
 static int mca_spml_ucx_component_fini(void)
 {
-    opal_progress_unregister(spml_ucx_progress);
+ //   int ret;
 
     if (mca_spml_ucx.async_progress) {
         opal_event_evtimer_del(mca_spml_ucx.tick_event);
         opal_progress_thread_finalize(NULL);
     }
-
+    SPML_VERBOSE(2, "[#%d] destroy, ctx %p, def %p", my_pe, mca_spml_ucx.aux_ctx,
+            oshmem_ctx_default);
     if (mca_spml_ucx.aux_ctx != NULL) {
-        MCA_SPML_CALL(ctx_destroy(mca_spml_ucx.aux_ctx));
+       // ret = mca_spml_ucx_del_procs_common(mca_spml_ucx.aux_ctx, NULL,
+          //                                  oshmem_num_procs(), 1);
+        mca_spml_ucx_ctx_destroy_common(mca_spml_ucx.aux_ctx);
+        free(mca_spml_ucx.aux_ctx);
+        pthread_spin_destroy(&mca_spml_ucx.async_lock);
     }
+
+    opal_progress_unregister(spml_ucx_progress);
 
     if (mca_spml_ucx_ctx_default.ucp_worker) {
         ucp_worker_destroy(mca_spml_ucx_ctx_default.ucp_worker);

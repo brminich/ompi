@@ -17,6 +17,8 @@
 #ifndef MCA_SPML_UCX_H
 #define MCA_SPML_UCX_H
 
+#include <pthread.h>
+
 #include "oshmem_config.h"
 #include "oshmem/request/request.h"
 #include "oshmem/mca/spml/base/base.h"
@@ -99,17 +101,40 @@ struct mca_spml_ucx {
     opal_event_base_t        *async_event_base;
     opal_event_t             *tick_event;
     shmem_internal_mutex_t   internal_mutex;
-    shmem_ctx_t              *aux_ctx;
+    mca_spml_ucx_ctx_t       *aux_ctx;
+    pthread_spinlock_t      async_lock;
 };
 typedef struct mca_spml_ucx mca_spml_ucx_t;
-
-
 extern mca_spml_ucx_t mca_spml_ucx;
+
+static inline int mca_spml_ucx_aux_trylock()
+{
+    return mca_spml_ucx.async_progress ?
+           pthread_spin_trylock(&mca_spml_ucx.async_lock) : 0;
+}
+
+static inline int mca_spml_ucx_aux_lock()
+{
+    return mca_spml_ucx.async_progress ?
+           pthread_spin_lock(&mca_spml_ucx.async_lock) : 0;
+}
+
+static inline int mca_spml_ucx_aux_unlock()
+{
+    return mca_spml_ucx.async_progress ?
+           pthread_spin_unlock(&mca_spml_ucx.async_lock) : 0;
+}
+
 
 extern int mca_spml_ucx_enable(bool enable);
 extern int mca_spml_ucx_ctx_create(long options,
                                    shmem_ctx_t *ctx);
+int mca_spml_ucx_ctx_create_common(mca_spml_ucx_ctx_t *ctx, int thread_mode);
 extern void mca_spml_ucx_ctx_destroy(shmem_ctx_t ctx);
+extern void mca_spml_ucx_ctx_destroy_common(mca_spml_ucx_ctx_t *ctx);
+extern int mca_spml_ucx_del_procs_common(mca_spml_ucx_ctx_t *ctx,
+                                         ompi_proc_t** procs,
+                                         size_t nprocs, size_t max_disconnect);
 extern int mca_spml_ucx_get(shmem_ctx_t ctx,
                               void* dst_addr,
                               size_t size,
@@ -135,6 +160,11 @@ extern int mca_spml_ucx_put_nb(shmem_ctx_t ctx,
                                  int dst,
                                  void **handle);
 
+extern int mca_spml_ucx_put_all_nb(void *target,
+                                   const void *source,
+                                   size_t size,
+                                   long *counter);
+
 extern int mca_spml_ucx_recv(void* buf, size_t size, int src);
 extern int mca_spml_ucx_send(void* buf,
                                size_t size,
@@ -159,7 +189,6 @@ extern int mca_spml_ucx_fence(shmem_ctx_t ctx);
 extern int mca_spml_ucx_quiet(shmem_ctx_t ctx);
 extern int spml_ucx_progress(void);
 void mca_spml_ucx_async_cb(int fd, short event, void *cbdata);
-OSHMEM_DECLSPEC void mca_spml_ucx_async_event_set();
 
 static inline spml_ucx_mkey_t *
 mca_spml_ucx_get_mkey(mca_spml_ucx_ctx_t *ucx_ctx, int pe, void *va, void **rva, mca_spml_ucx_t* module)
@@ -173,7 +202,8 @@ mca_spml_ucx_get_mkey(mca_spml_ucx_ctx_t *ucx_ctx, int pe, void *va, void **rva,
         return module->get_mkey_slow(pe, va, rva);
     }
     *rva = map_segment_va2rva(&mkey->super, va);
-    SPML_UCX_VERBOSE(2, " %d: get key for %d %p, ucxrkey %p",oshmem_my_proc_id(),pe, &mkey->key, mkey->key.rkey);
+    SPML_UCX_VERBOSE(2, " %d: get key for %d %p, ucxrkey %p",
+                      oshmem_my_proc_id(),pe, (void*)&mkey->key, (void*)mkey->key.rkey);
     return &mkey->key;
 }
 

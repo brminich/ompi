@@ -613,14 +613,13 @@ int mca_spml_ucx_ctx_create_common(mca_spml_ucx_ctx_t *ctx, int thread_mode)
 
 void mca_spml_ucx_ctx_destroy_common(mca_spml_ucx_ctx_t *ctx)
 {
-    size_t i, nprocs = oshmem_num_procs();
+    int ret;
 
     MCA_SPML_CALL(quiet((shmem_ctx_t)ctx));
+    ret = mca_spml_ucx_del_procs_common(ctx, NULL, oshmem_num_procs(),
+                                        mca_spml_ucx.num_disconnect); /* use default */
+    RUNTIME_CHECK_RC(ret);
 
-    for (i = 0; i < nprocs; i++) {
-        ucp_ep_destroy(ctx->ucp_peers[i].ucp_conn);
-    }
-    free(ctx->ucp_peers);
     ucp_worker_destroy(ctx->ucp_worker);
 }
 

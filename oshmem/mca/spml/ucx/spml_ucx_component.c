@@ -274,8 +274,6 @@ mca_spml_ucx_component_init(int* priority,
 
 static int mca_spml_ucx_component_fini(void)
 {
- //   int ret;
-
     if (mca_spml_ucx.async_progress) {
         opal_event_evtimer_del(mca_spml_ucx.tick_event);
         opal_progress_thread_finalize(NULL);
@@ -283,8 +281,6 @@ static int mca_spml_ucx_component_fini(void)
     SPML_VERBOSE(2, "[#%d] destroy, ctx %p, def %p", my_pe, mca_spml_ucx.aux_ctx,
             oshmem_ctx_default);
     if (mca_spml_ucx.aux_ctx != NULL) {
-       // ret = mca_spml_ucx_del_procs_common(mca_spml_ucx.aux_ctx, NULL,
-          //                                  oshmem_num_procs(), 1);
         mca_spml_ucx_ctx_destroy_common(mca_spml_ucx.aux_ctx);
         free(mca_spml_ucx.aux_ctx);
         pthread_spin_destroy(&mca_spml_ucx.async_lock);

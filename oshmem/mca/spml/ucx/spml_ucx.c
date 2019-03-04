@@ -819,7 +819,9 @@ static void mca_spml_ucs_put_all_complete_cb(void *request, ucs_status_t status)
         opal_progress_unregister(spml_ucx_progress_aux);
     }
 
-    ucp_request_free(request);
+    if (request != NULL) {
+        ucp_request_free(request);
+    }
 }
 
 int mca_spml_ucx_put_all_nb(void *target,
@@ -834,6 +836,7 @@ int mca_spml_ucx_put_all_nb(void *target,
     struct timeval tv;
     void *request;
 
+    mca_spml_ucx_aux_lock();
     if (mca_spml_ucx.async_progress) {
         if (mca_spml_ucx.aux_ctx == NULL) {
             mca_spml_ucx.aux_ctx = calloc(1, sizeof(mca_spml_ucx_ctx_t));
@@ -859,7 +862,6 @@ int mca_spml_ucx_put_all_nb(void *target,
     }
 
 
-    mca_spml_ucx_aux_lock();
     for (peer = 0; peer < oshmem_num_procs(); peer++) {
         dst_pe = (peer + my_pe) % oshmem_group_all->proc_count;
         rc = mca_spml_ucx_put_nb(ctx,
@@ -878,9 +880,7 @@ int mca_spml_ucx_put_all_nb(void *target,
     request = ucp_worker_flush_nb(((mca_spml_ucx_ctx_t*)ctx)->ucp_worker, 0,
                                   mca_spml_ucs_put_all_complete_cb);
     if (!UCS_PTR_IS_PTR(request)) {
-        if ( mca_spml_ucx.async_progress) {
-            opal_event_evtimer_del(mca_spml_ucx.tick_event);
-        }
+        mca_spml_ucs_put_all_complete_cb(NULL, UCS_PTR_STATUS(request));
     }
 
     mca_spml_ucx_aux_unlock();

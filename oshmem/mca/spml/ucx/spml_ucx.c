@@ -812,6 +812,14 @@ int mca_spml_ucx_send(void* buf,
     return rc;
 }
 
+static void mca_spml_ucs_put_all_complete_cb(void *request, ucs_status_t status)
+{
+    if ( mca_spml_ucx.async_progress) {
+        opal_event_evtimer_del(mca_spml_ucx.tick_event);
+    }
+    ucp_request_free(request);
+}
+
 int mca_spml_ucx_put_all_nb(void *target,
                             const void *source,
                             size_t size,
@@ -822,8 +830,8 @@ int mca_spml_ucx_put_all_nb(void *target,
     int peer, dst_pe, rc;
     shmem_ctx_t ctx;
     struct timeval tv;
+    void *request;
 
-    mca_spml_ucx_aux_lock();
 
     if (mca_spml_ucx.async_progress) {
         if (mca_spml_ucx.aux_ctx == NULL) {
@@ -835,17 +843,17 @@ int mca_spml_ucx_put_all_nb(void *target,
             rc = mca_spml_ucx_ctx_create_common(mca_spml_ucx.aux_ctx,
                                                 UCS_THREAD_MODE_SINGLE);
             RUNTIME_CHECK_RC(rc);
-
-            tv.tv_sec  = 0;
-            tv.tv_usec = mca_spml_ucx.async_tick;
-            opal_event_evtimer_add(mca_spml_ucx.tick_event, &tv);
         }
+        tv.tv_sec  = 0;
+        tv.tv_usec = mca_spml_ucx.async_tick;
+        opal_event_evtimer_add(mca_spml_ucx.tick_event, &tv);
         ctx = (shmem_ctx_t)mca_spml_ucx.aux_ctx;
     } else {
         ctx = oshmem_ctx_default;
     }
     SPML_VERBOSE(2, "[#%d] putall, ctx %p, def %p", my_pe, ctx, oshmem_ctx_default);
 
+    mca_spml_ucx_aux_lock();
     for (peer = 0; peer < oshmem_num_procs(); peer++) {
         dst_pe = (peer + my_pe) % oshmem_group_all->proc_count;
         rc = mca_spml_ucx_put_nb(ctx,
@@ -860,6 +868,15 @@ int mca_spml_ucx_put_all_nb(void *target,
         rc = MCA_ATOMIC_CALL(add(ctx, (void*)counter, val, sizeof(val), dst_pe));
         RUNTIME_CHECK_RC(rc);
     }
+
+    request = ucp_worker_flush_nb(((mca_spml_ucx_ctx_t*)ctx)->ucp_worker, 0,
+                                  mca_spml_ucs_put_all_complete_cb);
+    if (!UCS_PTR_IS_PTR(request)) {
+        if ( mca_spml_ucx.async_progress) {
+            opal_event_evtimer_del(mca_spml_ucx.tick_event);
+        }
+    }
+
     mca_spml_ucx_aux_unlock();
 
     return OSHMEM_SUCCESS;

@@ -585,9 +585,9 @@ int mca_spml_ucx_ctx_create_common(mca_spml_ucx_ctx_t *ctx, int thread_mode)
                 goto error2;
             }
             mca_spml_ucx_cache_mkey(ctx, mkey, j, i);
-            SPML_UCX_VERBOSE(2, "%d: ctx %p, pack key (%p, %p)  for seg %d, peer %ld ",
-                            oshmem_my_proc_id() ,(void*)ctx, (void*)ucx_mkey,
-                            (void*)ucx_mkey->rkey,j,i );
+       //     SPML_UCX_VERBOSE(2, "%d: ctx %p, pack key (%p, %p)  for seg %d, peer %ld ",
+         //                   oshmem_my_proc_id() ,(void*)ctx, (void*)ucx_mkey,
+           //                 (void*)ucx_mkey->rkey,j,i );
         }
 
     }
@@ -814,9 +814,11 @@ int mca_spml_ucx_send(void* buf,
 
 static void mca_spml_ucs_put_all_complete_cb(void *request, ucs_status_t status)
 {
-    if ( mca_spml_ucx.async_progress) {
+    if (mca_spml_ucx.async_progress && (--mca_spml_ucx.aux_refcnt == 0)) {
         opal_event_evtimer_del(mca_spml_ucx.tick_event);
+        opal_progress_unregister(spml_ucx_progress_aux);
     }
+
     ucp_request_free(request);
 }
 
@@ -832,7 +834,6 @@ int mca_spml_ucx_put_all_nb(void *target,
     struct timeval tv;
     void *request;
 
-
     if (mca_spml_ucx.async_progress) {
         if (mca_spml_ucx.aux_ctx == NULL) {
             mca_spml_ucx.aux_ctx = calloc(1, sizeof(mca_spml_ucx_ctx_t));
@@ -844,14 +845,19 @@ int mca_spml_ucx_put_all_nb(void *target,
                                                 UCS_THREAD_MODE_SINGLE);
             RUNTIME_CHECK_RC(rc);
         }
-        tv.tv_sec  = 0;
-        tv.tv_usec = mca_spml_ucx.async_tick;
-        opal_event_evtimer_add(mca_spml_ucx.tick_event, &tv);
+
+        if (!mca_spml_ucx.aux_refcnt) {
+            tv.tv_sec  = 0;
+            tv.tv_usec = mca_spml_ucx.async_tick;
+            opal_event_evtimer_add(mca_spml_ucx.tick_event, &tv);
+            opal_progress_register(spml_ucx_progress_aux);
+        }
         ctx = (shmem_ctx_t)mca_spml_ucx.aux_ctx;
+        ++mca_spml_ucx.aux_refcnt;
     } else {
         ctx = oshmem_ctx_default;
     }
-    SPML_VERBOSE(2, "[#%d] putall, ctx %p, def %p", my_pe, ctx, oshmem_ctx_default);
+
 
     mca_spml_ucx_aux_lock();
     for (peer = 0; peer < oshmem_num_procs(); peer++) {

@@ -128,10 +128,17 @@ int spml_ucx_progress(void)
         ucp_worker_progress(ctx_item->ctx.ucp_worker);
     }
     ucp_worker_progress(mca_spml_ucx_ctx_default.ucp_worker);
+    return 1;
+}
 
-    if (!mca_spml_ucx.aux_ctx) {
+int spml_ucx_progress_aux(void)
+{
+    mca_spml_ucx_ctx_list_item_t *ctx_item;
+
+    if (OPAL_UNLIKELY(!mca_spml_ucx.aux_ctx)) {
         return;
     }
+
     if (mca_spml_ucx_aux_trylock()) {
         return;
     }
@@ -151,7 +158,6 @@ void mca_spml_ucx_async_cb(int fd, short event, void *cbdata)
     do {
         count = ucp_worker_progress(mca_spml_ucx.aux_ctx->ucp_worker);
     }  while(count);
-    SPML_UCX_VERBOSE(2, "Progressed %d\n", count);
     mca_spml_ucx_aux_unlock();
 }
 
@@ -246,7 +252,8 @@ static int spml_ucx_init(void)
                       -1, EV_PERSIST,
                        mca_spml_ucx_async_cb, NULL);
     }
-    mca_spml_ucx.aux_ctx = NULL;
+    mca_spml_ucx.aux_ctx    = NULL;
+    mca_spml_ucx.aux_refcnt = 0;
 
     oshmem_ctx_default = (shmem_ctx_t) &mca_spml_ucx_ctx_default;
     return OSHMEM_SUCCESS;

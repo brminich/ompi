@@ -103,6 +103,7 @@ struct mca_spml_ucx {
     shmem_internal_mutex_t   internal_mutex;
     mca_spml_ucx_ctx_t       *aux_ctx;
     pthread_spinlock_t      async_lock;
+    int                     aux_refcnt; 
 };
 typedef struct mca_spml_ucx mca_spml_ucx_t;
 extern mca_spml_ucx_t mca_spml_ucx;
@@ -188,6 +189,7 @@ extern int mca_spml_ucx_del_procs(ompi_proc_t** procs, size_t nprocs);
 extern int mca_spml_ucx_fence(shmem_ctx_t ctx);
 extern int mca_spml_ucx_quiet(shmem_ctx_t ctx);
 extern int spml_ucx_progress(void);
+extern int spml_ucx_progress_aux(void);
 void mca_spml_ucx_async_cb(int fd, short event, void *cbdata);
 
 static inline spml_ucx_mkey_t *
@@ -202,8 +204,8 @@ mca_spml_ucx_get_mkey(mca_spml_ucx_ctx_t *ucx_ctx, int pe, void *va, void **rva,
         return module->get_mkey_slow(pe, va, rva);
     }
     *rva = map_segment_va2rva(&mkey->super, va);
-    SPML_UCX_VERBOSE(2, " %d: get key for %d %p, ucxrkey %p",
-                      oshmem_my_proc_id(),pe, (void*)&mkey->key, (void*)mkey->key.rkey);
+//    SPML_UCX_VERBOSE(2, " %d: get key for %d %p, ucxrkey %p",
+  //                    oshmem_my_proc_id(),pe, (void*)&mkey->key, (void*)mkey->key.rkey);
     return &mkey->key;
 }
 

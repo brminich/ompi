@@ -134,8 +134,6 @@ int mca_spml_ucx_del_procs_common(mca_spml_ucx_ctx_t *ctx,
                                     max_disconnect, ctx->ucp_worker);
 
     free(del_procs);
-    free(ctx->ucp_peers);
-    ctx->ucp_peers = NULL;
 
     return ret;
 }
@@ -150,6 +148,8 @@ int mca_spml_ucx_del_procs(ompi_proc_t** procs, size_t nprocs)
                                         mca_spml_ucx.num_disconnect);
 
     free(mca_spml_ucx.remote_addrs_tbl);
+    free(mca_spml_ucx_ctx_default.ucp_peers);
+    mca_spml_ucx_ctx_default.ucp_peers = NULL;
 
     return ret;
 }
@@ -613,12 +613,22 @@ int mca_spml_ucx_ctx_create_common(mca_spml_ucx_ctx_t *ctx, int thread_mode)
 
 void mca_spml_ucx_ctx_destroy_common(mca_spml_ucx_ctx_t *ctx)
 {
-    int ret;
+    spml_ucx_mkey_t *ucx_mkey;
+    int ret, i, j;
 
     MCA_SPML_CALL(quiet((shmem_ctx_t)ctx));
     ret = mca_spml_ucx_del_procs_common(ctx, NULL, oshmem_num_procs(),
                                         mca_spml_ucx.num_disconnect); /* use default */
     RUNTIME_CHECK_RC(ret);
+
+    for (i = 0; i < oshmem_num_procs(); ++i) {
+        for (j = 0; j < memheap_map->n_segments; j++) {
+            ucx_mkey = &ctx->ucp_peers[i].mkeys[j].key;
+            ucp_rkey_destroy(ucx_mkey->rkey);
+        }
+    }
+    free(ctx->ucp_peers);
+    ctx->ucp_peers = NULL;
 
     ucp_worker_destroy(ctx->ucp_worker);
 }
